@@ -338,6 +338,97 @@ export class PromotionService {
         return this.connection.getRepository(ctx, Order).save(order);
     }
 
+    /**
+     * @description
+     * Returns a Set of Promotion IDs that have exceeded their `usageLimit` or
+     * `perCustomerUsageLimit`. Only checks promotions without a coupon code
+     * (coupon-based promotions are validated separately in `validateCouponCode()`).
+     */
+    async getExhaustedPromotionIds(
+        ctx: RequestContext,
+        promotions: Promotion[],
+        customerId?: ID,
+    ): Promise<Set<ID>> {
+        const exhaustedIds = new Set<ID>();
+
+        const withUsageLimit = promotions.filter(p => !p.couponCode && p.usageLimit != null);
+        const withPerCustomerLimit = promotions.filter(p => !p.couponCode && p.perCustomerUsageLimit != null);
+
+        if (withUsageLimit.length) {
+            const usageCounts = await this.getUsageCountsForPromotions(
+                ctx,
+                withUsageLimit.map(p => p.id),
+            );
+            for (const promotion of withUsageLimit) {
+                const count = usageCounts.get(promotion.id.toString()) ?? 0;
+                if (promotion.usageLimit <= count) {
+                    exhaustedIds.add(promotion.id);
+                }
+            }
+        }
+
+        // perCustomerUsageLimit can only be checked if we know the customer.
+        // For guest checkouts without a customer, we skip this check
+        // (matching the existing behavior in validateCouponCode).
+        if (customerId && withPerCustomerLimit.length) {
+            const perCustomerCounts = await this.getUsageCountsForPromotionsForCustomer(
+                ctx,
+                withPerCustomerLimit.map(p => p.id),
+                customerId,
+            );
+            for (const promotion of withPerCustomerLimit) {
+                const count = perCustomerCounts.get(promotion.id.toString()) ?? 0;
+                if (promotion.perCustomerUsageLimit <= count) {
+                    exhaustedIds.add(promotion.id);
+                }
+            }
+        }
+
+        return exhaustedIds;
+    }
+
+    private async getUsageCountsForPromotions(
+        ctx: RequestContext,
+        promotionIds: ID[],
+    ): Promise<Map<string, number>> {
+        const results = await this.connection
+            .getRepository(ctx, Order)
+            .createQueryBuilder('order')
+            .leftJoin('order.promotions', 'promotion')
+            .select('promotion.id', 'promotionId')
+            .addSelect('COUNT(DISTINCT order.id)', 'usageCount')
+            .where('promotion.id IN (:...promotionIds)', { promotionIds })
+            .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
+            .andWhere('order.active = :active', { active: false })
+            .andWhere('order.type != :type', { type: OrderType.Seller })
+            .groupBy('promotion.id')
+            .getRawMany<{ promotionId: string; usageCount: string }>();
+
+        return new Map(results.map(r => [r.promotionId.toString(), Number(r.usageCount)]));
+    }
+
+    private async getUsageCountsForPromotionsForCustomer(
+        ctx: RequestContext,
+        promotionIds: ID[],
+        customerId: ID,
+    ): Promise<Map<string, number>> {
+        const results = await this.connection
+            .getRepository(ctx, Order)
+            .createQueryBuilder('order')
+            .leftJoin('order.promotions', 'promotion')
+            .select('promotion.id', 'promotionId')
+            .addSelect('COUNT(DISTINCT order.id)', 'usageCount')
+            .where('promotion.id IN (:...promotionIds)', { promotionIds })
+            .andWhere('order.customer = :customerId', { customerId })
+            .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
+            .andWhere('order.active = :active', { active: false })
+            .andWhere('order.type != :type', { type: OrderType.Seller })
+            .groupBy('promotion.id')
+            .getRawMany<{ promotionId: string; usageCount: string }>();
+
+        return new Map(results.map(r => [r.promotionId.toString(), Number(r.usageCount)]));
+    }
+
     private async countPromotionUsagesForCustomer(
         ctx: RequestContext,
         promotionId: ID,
