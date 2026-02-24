@@ -13,8 +13,12 @@ const dynamicApiModuleClassMap: { [name: string]: Type<any> } = {};
  * any configured plugins.
  */
 export function createDynamicGraphQlModulesForPlugins(apiType: 'shop' | 'admin'): DynamicModule[] {
-    return getConfig()
-        .plugins.map(plugin => {
+    const config = getConfig();
+    if (!config?.plugins) {
+        return [];
+    }
+    return config.plugins
+        .map(plugin => {
             const pluginModule = isDynamicModule(plugin) ? plugin.module : plugin;
             const resolvers = graphQLResolversFor(plugin, apiType) || [];
 

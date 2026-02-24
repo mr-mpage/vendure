@@ -14,7 +14,7 @@ export class PluginModule {
     static forRoot(): DynamicModule {
         return {
             module: PluginModule,
-            imports: [...getConfig().plugins],
+            imports: [...(getConfig()?.plugins ?? [])],
         };
     }
 }
