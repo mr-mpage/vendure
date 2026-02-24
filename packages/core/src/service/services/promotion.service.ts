@@ -340,12 +340,6 @@ export class PromotionService {
 
     /**
      * @description
-     * Returns a Set of Promotion IDs that have exceeded their `usageLimit` or
-     * `perCustomerUsageLimit`. Only checks promotions without a coupon code
-     * (coupon-based promotions are validated separately in `validateCouponCode()`).
-     */
-    /**
-     * @description
      * Returns a Set of Promotion IDs (as strings) that have exceeded their `usageLimit` or
      * `perCustomerUsageLimit`. Only checks promotions without a coupon code
      * (coupon-based promotions are validated separately in `validateCouponCode()`).
