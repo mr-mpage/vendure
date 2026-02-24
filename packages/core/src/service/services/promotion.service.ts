@@ -344,25 +344,31 @@ export class PromotionService {
      * `perCustomerUsageLimit`. Only checks promotions without a coupon code
      * (coupon-based promotions are validated separately in `validateCouponCode()`).
      */
+    /**
+     * @description
+     * Returns a Set of Promotion IDs (as strings) that have exceeded their `usageLimit` or
+     * `perCustomerUsageLimit`. Only checks promotions without a coupon code
+     * (coupon-based promotions are validated separately in `validateCouponCode()`).
+     */
     async getExhaustedPromotionIds(
         ctx: RequestContext,
         promotions: Promotion[],
         customerId?: ID,
-    ): Promise<Set<ID>> {
-        const exhaustedIds = new Set<ID>();
+    ): Promise<Set<string>> {
+        const exhaustedIds = new Set<string>();
 
         const withUsageLimit = promotions.filter(p => !p.couponCode && p.usageLimit != null);
         const withPerCustomerLimit = promotions.filter(p => !p.couponCode && p.perCustomerUsageLimit != null);
 
         if (withUsageLimit.length) {
-            const usageCounts = await this.getUsageCountsForPromotions(
+            const usageCounts = await this.getUsageCountsBatch(
                 ctx,
                 withUsageLimit.map(p => p.id),
             );
             for (const promotion of withUsageLimit) {
                 const count = usageCounts.get(promotion.id.toString()) ?? 0;
                 if (promotion.usageLimit <= count) {
-                    exhaustedIds.add(promotion.id);
+                    exhaustedIds.add(promotion.id.toString());
                 }
             }
         }
@@ -371,7 +377,7 @@ export class PromotionService {
         // For guest checkouts without a customer, we skip this check
         // (matching the existing behavior in validateCouponCode).
         if (customerId && withPerCustomerLimit.length) {
-            const perCustomerCounts = await this.getUsageCountsForPromotionsForCustomer(
+            const perCustomerCounts = await this.getUsageCountsBatch(
                 ctx,
                 withPerCustomerLimit.map(p => p.id),
                 customerId,
@@ -379,7 +385,7 @@ export class PromotionService {
             for (const promotion of withPerCustomerLimit) {
                 const count = perCustomerCounts.get(promotion.id.toString()) ?? 0;
                 if (promotion.perCustomerUsageLimit <= count) {
-                    exhaustedIds.add(promotion.id);
+                    exhaustedIds.add(promotion.id.toString());
                 }
             }
         }
@@ -387,45 +393,34 @@ export class PromotionService {
         return exhaustedIds;
     }
 
-    private async getUsageCountsForPromotions(
-        ctx: RequestContext,
-        promotionIds: ID[],
-    ): Promise<Map<string, number>> {
-        const results = await this.connection
+    /**
+     * Returns a base query builder for counting promotion usages on placed orders.
+     * Excludes cancelled orders, active (un-placed) orders, and seller-type orders.
+     */
+    private placedOrdersWithPromotionQb(ctx: RequestContext) {
+        return this.connection
             .getRepository(ctx, Order)
             .createQueryBuilder('order')
-            .leftJoin('order.promotions', 'promotion')
-            .select('promotion.id', 'promotionId')
-            .addSelect('COUNT(DISTINCT order.id)', 'usageCount')
-            .where('promotion.id IN (:...promotionIds)', { promotionIds })
+            .innerJoin('order.promotions', 'promotion')
             .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
             .andWhere('order.active = :active', { active: false })
-            .andWhere('order.type != :type', { type: OrderType.Seller })
-            .groupBy('promotion.id')
-            .getRawMany<{ promotionId: string; usageCount: string }>();
-
-        return new Map(results.map(r => [r.promotionId.toString(), Number(r.usageCount)]));
+            .andWhere('order.type != :type', { type: OrderType.Seller });
     }
 
-    private async getUsageCountsForPromotionsForCustomer(
+    private async getUsageCountsBatch(
         ctx: RequestContext,
         promotionIds: ID[],
-        customerId: ID,
+        customerId?: ID,
     ): Promise<Map<string, number>> {
-        const results = await this.connection
-            .getRepository(ctx, Order)
-            .createQueryBuilder('order')
-            .leftJoin('order.promotions', 'promotion')
+        const qb = this.placedOrdersWithPromotionQb(ctx)
             .select('promotion.id', 'promotionId')
             .addSelect('COUNT(DISTINCT order.id)', 'usageCount')
             .where('promotion.id IN (:...promotionIds)', { promotionIds })
-            .andWhere('order.customer = :customerId', { customerId })
-            .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
-            .andWhere('order.active = :active', { active: false })
-            .andWhere('order.type != :type', { type: OrderType.Seller })
-            .groupBy('promotion.id')
-            .getRawMany<{ promotionId: string; usageCount: string }>();
-
+            .groupBy('promotion.id');
+        if (customerId) {
+            qb.andWhere('order.customer = :customerId', { customerId });
+        }
+        const results = await qb.getRawMany<{ promotionId: string; usageCount: string }>();
         return new Map(results.map(r => [r.promotionId.toString(), Number(r.usageCount)]));
     }
 
@@ -434,30 +429,16 @@ export class PromotionService {
         promotionId: ID,
         customerId: ID,
     ): Promise<number> {
-        const qb = this.connection
-            .getRepository(ctx, Order)
-            .createQueryBuilder('order')
-            .leftJoin('order.promotions', 'promotion')
-            .where('promotion.id = :promotionId', { promotionId })
+        return this.placedOrdersWithPromotionQb(ctx)
+            .andWhere('promotion.id = :promotionId', { promotionId })
             .andWhere('order.customer = :customerId', { customerId })
-            .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
-            .andWhere('order.active = :active', { active: false })
-            .andWhere('order.type != :type', { type: OrderType.Seller });
-
-        return qb.getCount();
+            .getCount();
     }
 
     private async countPromotionUsages(ctx: RequestContext, promotionId: ID): Promise<number> {
-        const qb = this.connection
-            .getRepository(ctx, Order)
-            .createQueryBuilder('order')
-            .leftJoin('order.promotions', 'promotion')
-            .where('promotion.id = :promotionId', { promotionId })
-            .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
-            .andWhere('order.active = :active', { active: false })
-            .andWhere('order.type != :type', { type: OrderType.Seller });
-
-        return qb.getCount();
+        return this.placedOrdersWithPromotionQb(ctx)
+            .andWhere('promotion.id = :promotionId', { promotionId })
+            .getCount();
     }
 
     private calculatePriorityScore(input: CreatePromotionInput | UpdatePromotionInput): number {
