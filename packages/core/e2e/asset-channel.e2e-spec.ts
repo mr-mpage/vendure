@@ -240,6 +240,19 @@ describe('Product related assets', () => {
         });
         expect(product!.assets.find(a => a.id === 'T_3')).toBeUndefined();
     });
+
+    it('Updating product with asset IDs not in channel does not crash', async () => {
+        adminClient.setChannelToken(SECOND_CHANNEL_TOKEN);
+        // T_3 is not assigned to channel2, so findByIdsInChannel returns empty.
+        // This should not crash and should clear the product's assets.
+        const { updateProduct } = await adminClient.query(updateProductDocument, {
+            input: {
+                id: 'T_2',
+                assetIds: ['T_3'],
+            },
+        });
+        expect(updateProduct.assets).toEqual([]);
+    });
 });
 
 describe('Collection related assets', () => {
