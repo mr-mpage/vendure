@@ -112,17 +112,17 @@ export class FacetService {
         lang?: LanguageCode,
     ): Promise<Translated<Facet> | undefined> {
         const relations = ['values', 'values.facet'];
-        const [repository, facetCode, languageCode] =
+        const [repository, facetCode, languageCode, channelLanguageCode] =
             ctxOrFacetCode instanceof RequestContext
                 ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                  [this.connection.getRepository(ctxOrFacetCode, Facet), facetCodeOrLang, lang!]
+                  [this.connection.getRepository(ctxOrFacetCode, Facet), facetCodeOrLang, lang!, ctxOrFacetCode.channel.defaultLanguageCode]
                 : [
                       this.connection.rawConnection.getRepository(Facet),
                       ctxOrFacetCode,
                       facetCodeOrLang as LanguageCode,
+                      undefined,
                   ];
 
-        // TODO: Implement usage of channelLanguageCode
         return repository
             .findOne({
                 where: {
@@ -132,7 +132,7 @@ export class FacetService {
             })
             .then(
                 facet =>
-                    (facet && translateDeep(facet, languageCode, ['values', ['values', 'facet']])) ??
+                    (facet && translateDeep(facet, channelLanguageCode ? [languageCode, channelLanguageCode] : languageCode, ['values', ['values', 'facet']])) ??
                     undefined,
             );
     }
