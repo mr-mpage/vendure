@@ -63,8 +63,13 @@ export class FacetValueService {
         const [repository, languageCode, channelLanguageCode] =
             ctxOrLang instanceof RequestContext
                 ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                  [this.connection.getRepository(ctxOrLang, FacetValue), lang!, ctxOrLang.channel.defaultLanguageCode]
+                  [
+                      this.connection.getRepository(ctxOrLang, FacetValue),
+                      lang!,
+                      ctxOrLang.channel.defaultLanguageCode,
+                  ]
                 : [this.connection.rawConnection.getRepository(FacetValue), ctxOrLang, undefined];
+        const globalDefaultLanguageCode = this.configService.defaultLanguageCode;
         return repository
             .find({
                 relations: ['facet'],
@@ -73,7 +78,9 @@ export class FacetValueService {
                 facetValues.map(facetValue =>
                     translateDeep(
                         facetValue,
-                        channelLanguageCode ? [languageCode, channelLanguageCode] : languageCode,
+                        channelLanguageCode
+                            ? [languageCode, channelLanguageCode, globalDefaultLanguageCode]
+                            : [languageCode, globalDefaultLanguageCode],
                         ['facet'],
                     ),
                 ),
@@ -223,6 +230,8 @@ export class FacetValueService {
             both,
             facetValueCode: facetValue.code,
         };
+        // Create a new facetValue so that the id is still available
+        // after deletion (the .remove() method sets it to undefined)
         const deletedFacetValue = new FacetValue(facetValue);
 
         if (!isInUse) {
@@ -245,6 +254,10 @@ export class FacetValueService {
         };
     }
 
+    /**
+     * @description
+     * Checks for usage of the given FacetValues in any Products or Variants, and returns the counts.
+     */
     async checkFacetValueUsage(
         ctx: RequestContext,
         facetValueIds: ID[],
